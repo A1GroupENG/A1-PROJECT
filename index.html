@@ -170,4 +170,89 @@ function newQuestion() {
 
     document.getElementById("question").innerHTML = `What is ${num1} ${op} ${num2}? <span style="font-size:28px;color:#333;">π √</span>`;
     document.getElementById("answer").value = "";
-    document.getElementById("question").style.background = "rgba
+    document.getElementById("question").style.background = "rgba(255,255,255,0.9)";
+}
+
+function startTimer() {
+    timeLeft = Number(document.getElementById("timeSelect").value);
+    document.getElementById("timer").innerHTML = "Time: " + timeLeft;
+
+    timer = setInterval(() => {
+        if(isPaused) return;
+        timeLeft--;
+        document.getElementById("timer").innerHTML = "Time: " + timeLeft;
+        if(timeLeft<=0){
+            clearInterval(timer);
+            score--;
+            flashWrong();
+            document.getElementById("score").innerHTML = "Score: " + score;
+        }
+    },1000);
+}
+
+function checkAnswer(){
+    if(isPaused) return;
+    let userAns = Number(document.getElementById("answer").value);
+    if(userAns===correct){
+        score++;
+        document.getElementById("correctSound").play();
+        flashCorrect();
+        questionCount++;
+        if(questionCount>=10){
+            if(stage<4){
+                stage++;
+                questionCount=0;
+                document.getElementById("stage").innerHTML = "Stage: "+stage+" / 4";
+                alert(`🎉 Stage ${stage} unlocked!`);
+            } else{
+                document.getElementById("winScreen").style.display="block";
+                return;
+            }
+        }
+    } else{
+        score--;
+        document.getElementById("wrongSound").play();
+        flashWrong();
+    }
+    document.getElementById("score").innerHTML = "Score: "+score;
+    newQuestion();
+}
+
+function flashWrong(){
+    let q=document.getElementById("question");
+    q.style.background="rgba(255,0,0,0.7)";
+    setTimeout(()=>{q.style.background="rgba(255,255,255,0.9)";},300);
+}
+
+function flashCorrect(){
+    let q=document.getElementById("question");
+    q.style.background="rgba(0,255,0,0.7)";
+    setTimeout(()=>{q.style.background="rgba(255,255,255,0.9)";},200);
+}
+
+function resetGame(){
+    score=0; questionCount=0; stage=1; isPaused=false;
+    askedQuestions.clear();
+    document.getElementById("winScreen").style.display="none";
+    document.getElementById("score").innerHTML="Score: 0";
+    document.getElementById("stage").innerHTML="Stage: 1 / 4";
+    document.getElementById("pauseBtn").innerText="Pause";
+    newQuestion();
+}
+
+function togglePause(){
+    if(!isPaused){
+        clearInterval(timer);
+        isPaused=true;
+        document.getElementById("pauseBtn").innerText="Resume";
+        document.getElementById("question").innerHTML="⏸ Game Paused";
+    } else{
+        isPaused=false;
+        document.getElementById("pauseBtn").innerText="Pause";
+        newQuestion();
+    }
+}
+</script>
+
+</body>
+</html>
