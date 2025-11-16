@@ -9,10 +9,10 @@
         text-align: center;
         margin: 0;
         background-color: #ffffff;
-        background-image: 
-            linear-gradient(45deg, #eee 25%, transparent 25%), 
-            linear-gradient(-45deg, #eee 25%, transparent 25%), 
-            linear-gradient(45deg, transparent 75%, #eee 75%), 
+        background-image:
+            linear-gradient(45deg, #eee 25%, transparent 25%),
+            linear-gradient(-45deg, #eee 25%, transparent 25%),
+            linear-gradient(45deg, transparent 75%, #eee 75%),
             linear-gradient(-45deg, transparent 75%, #eee 75%);
         background-size: 40px 40px;
         background-position: 0 0, 0 20px, 20px -20px, -20px 0px;
@@ -20,53 +20,61 @@
         color: #333;
     }
 
-    .logo { font-size: 55px; font-weight: bold; padding-top: 20px; color: #333; text-shadow: 2px 2px 3px #aaa; }
-    .gen { font-size: 22px; margin-top: -10px; color: #555; font-weight: bold; letter-spacing: 2px; text-shadow: 1px 1px 2px #aaa; }
-    h1 { font-size: 45px; margin: 20px 0; text-shadow: 1px 1px 3px #aaa; }
+    .logo { font-size: 55px; font-weight: bold; padding-top: 25px; color: #333; text-shadow: 2px 2px 3px #aaa; }
+    .gen { font-size: 20px; margin-top: -8px; color: #666; font-weight: bold; letter-spacing: 2px; }
+    h1 { font-size: 48px; margin: 20px 0; text-shadow: 1px 1px 3px #bbb; }
 
     #question {
-        font-size: 60px; /* أكبر حجم */
-        margin: 50px auto 30px auto;
-        padding: 40px 60px;
-        background: rgba(255, 255, 255, 0.9); 
-        color: #333;
-        display: block;
+        font-size: 60px;
+        margin: 40px auto 25px auto;
+        padding: 50px 80px;
+        background: rgba(255,255,255,0.95);
         border-radius: 25px;
-        box-shadow: 0px 0px 20px #ccc;
-        min-width: 600px; /* أعرض */
+        box-shadow: 0 0 25px #ccc;
+        min-width: 600px;
         max-width: 90%;
-        transition: 0.3s;
+        transition: 0.25s;
     }
 
     #answer {
-        padding: 20px;
-        font-size: 32px;
-        width: 400px;
+        padding: 25px;
+        font-size: 36px;
+        width: 450px;
         max-width: 90%;
-        border-radius: 15px;
-        border: 2px solid #ccc;
-        margin-bottom: 25px;
+        border-radius: 18px;
+        border: 2px solid #bbb;
+        margin-bottom: 20px;
         text-align: center;
         display: block;
         margin-left: auto;
         margin-right: auto;
     }
 
-    input, select {
+    select {
         font-size: 22px;
         border-radius: 12px;
     }
 
     button {
-        padding: 14px 30px; font-size: 22px; border: none; border-radius: 12px; cursor: pointer;
-        background: #4CAF50; color: white; margin: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: 0.3s;
+        padding: 20px 50px;
+        font-size: 28px;
+        font-weight: bold;
+        border: none;
+        border-radius: 15px;
+        cursor: pointer;
+        margin: 10px;
+        color: white;
+        background: #4CAF50;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        transition: 0.25s;
     }
-    button:hover { transform: scale(1.1); background: #45a049; }
+    button:hover { transform: scale(1.08); background: #43a047; }
+    .disabled { background: #777 !important; box-shadow: none !important; transform: none !important; }
 
-    #score, #timer, #stage { font-size: 28px; margin-top: 15px; font-weight: bold; text-shadow: 1px 1px 2px #aaa; }
-    #winScreen { display: none; font-size: 45px; margin-top: 50px; color: #00b300; text-shadow: 2px 2px 6px #aaa; }
-    .dark { background-color: #222; color: #fff; background-image: none; }
-    .dark #question { background: #333; color: white; box-shadow: 0 0 20px #555; }
+    #score, #timer, #stage { font-size: 28px; margin-top: 10px; font-weight: bold; }
+    #winScreen { display: none; font-size: 45px; margin-top: 50px; color: #06a700; font-weight: bold; }
+    .dark { background-color: #111; color: white; background-image: none; }
+    .dark #question { background: #333; color: white; }
 </style>
 </head>
 <body>
@@ -82,7 +90,7 @@
 </select>
 
 <br><br>
-<label for="timeSelect" style="font-size:20px;">Time per question (seconds):</label>
+<label style="font-size:20px;">Time per question (seconds):</label>
 <select id="timeSelect">
     <option value="10">10</option>
     <option value="20">20</option>
@@ -101,48 +109,71 @@
 <input type="number" id="answer" placeholder="Your answer">
 
 <div>
-<button onclick="checkAnswer()">Submit</button>
-<button onclick="newQuestion()">Start</button>
+    <button id="submitBtn" onclick="checkAnswer()">Submit</button>
+    <button onclick="startGame()">Start</button>
 </div>
 
 <p id="timer">Time: 10</p>
 <p id="score">Score: 0</p>
-<div id="winScreen">🎉 YOU WON ALL STAGES! 🔥<br><button onclick="resetGame()">Play Again</button></div>
+
+<div id="winScreen">
+    🎉 YOU WON ALL STAGES! 🔥<br>
+    <button onclick="resetGame()">Play Again</button>
+</div>
 
 <audio id="correctSound" src="https://cdn.pixabay.com/audio/2021/09/07/audio_1d0b9efc41.mp3"></audio>
 <audio id="wrongSound" src="https://cdn.pixabay.com/audio/2022/03/15/audio_52dbf50a42.mp3"></audio>
 
 <script>
-let num1, num2, correct, timer;
-let score = 0, questionCount = 0, stage = 1;
-let timeLeft = 10, isPaused = false;
+let score = 0, stage = 1, questionCount = 0;
+let correctAnswer = 0;
+let timer, timeLeft;
+let isPaused = false;
+let usedQuestions = new Set();
 
 function toggleDarkMode() { document.body.classList.toggle("dark"); }
-function randomOperation(difficulty) {
-    if (difficulty === "easy") return "+";
-    if (difficulty === "medium") return ["+", "-"][Math.floor(Math.random()*2)];
-    if (difficulty === "hard") return ["+", "-", "×", "÷"][Math.floor(Math.random()*4)];
+
+function startGame() {
+    score = 0; stage = 1; questionCount = 0; usedQuestions.clear();
+    document.getElementById("score").innerHTML = "Score: 0";
+    document.getElementById("stage").innerHTML = "Stage: 1 / 4";
+    document.getElementById("winScreen").style.display = "none";
+    newQuestion();
+}
+
+function pickOperation(diff) {
+    if(diff==="easy") return "+";
+    if(diff==="medium") return ["+","-"][Math.floor(Math.random()*2)];
+    return ["+","-","×","÷"][Math.floor(Math.random()*4)];
 }
 
 function newQuestion() {
     if(isPaused) return;
+
     clearInterval(timer);
     startTimer();
 
-    let difficulty = document.getElementById("difficulty").value;
-    let op = randomOperation(difficulty);
+    let diff = document.getElementById("difficulty").value;
+    let op, n1, n2, key;
 
-    num1 = Math.floor(Math.random()*20)+1;
-    num2 = Math.floor(Math.random()*20)+1;
+    do {
+        op = pickOperation(diff);
+        n1 = Math.floor(Math.random()*(10 + stage*5)) + 1;
+        n2 = Math.floor(Math.random()*(10 + stage*5)) + 1;
+        if(op==="÷") n1 = n2 * (Math.floor(Math.random()*10)+1);
+        key = `${n1}${op}${n2}`;
+    } while(usedQuestions.has(key));
 
-    if(op==="+") correct = num1 + num2;
-    if(op==="-") correct = num1 - num2;
-    if(op==="×") correct = num1 * num2;
-    if(op==="÷") { num1 = num2 * (Math.floor(Math.random()*10)+1); correct = num1 / num2; }
+    usedQuestions.add(key);
 
-    document.getElementById("question").innerHTML = `What is ${num1} ${op} ${num2}?`;
+    if(op==="+") correctAnswer = n1+n2;
+    if(op==="-") correctAnswer = n1-n2;
+    if(op==="×") correctAnswer = n1*n2;
+    if(op==="÷") correctAnswer = parseFloat((n1/n2).toFixed(2));
+
+    document.getElementById("question").innerHTML = `What is ${n1} ${op} ${n2}?`;
     document.getElementById("answer").value = "";
-    document.getElementById("question").style.background = "rgba(255,255,255,0.9)";
+    document.getElementById("question").style.background = "rgba(255,255,255,0.95)";
 }
 
 function startTimer() {
@@ -153,42 +184,65 @@ function startTimer() {
         if(isPaused) return;
         timeLeft--;
         document.getElementById("timer").innerHTML = "Time: " + timeLeft;
-        if(timeLeft<=0){
+        if(timeLeft <= 0){
             clearInterval(timer);
             score--;
             flashWrong();
-            document.getElementById("score").innerHTML = "Score: " + score;
             questionCount++;
             nextStageCheck();
         }
     },1000);
 }
 
-function checkAnswer(){
+function checkAnswer() {
     if(isPaused) return;
-    let userAns = Number(document.getElementById("answer").value);
-    questionCount++;
-    if(userAns===correct){
-        score++;
-        document.getElementById("correctSound").play();
-        flashCorrect();
-    } else{
-        score--;
-        document.getElementById("wrongSound").play();
-        flashWrong();
-    }
-    document.getElementById("score").innerHTML = "Score: "+score;
-    nextStageCheck();
+    let ans = Number(document.getElementById("answer").value);
+    let btn = document.getElementById("submitBtn");
+    btn.disabled = true;
+    btn.classList.add("disabled");
+
+    let correctCheck = Math.abs(ans - correctAnswer) < 0.01; // handle division rounding
+
+    if(correctCheck) correct(); else wrong();
+
+    setTimeout(()=>{ btn.disabled=false; btn.classList.remove("disabled"); },350);
 }
 
-function nextStageCheck(){
-    if(questionCount >= 10){
+function correct() {
+    score++;
+    document.getElementById("score").innerHTML="Score: "+score;
+    document.getElementById("correctSound").play();
+    let q=document.getElementById("question");
+    q.style.background="rgba(0,255,0,0.7)";
+    setTimeout(()=>{
+        q.style.background="rgba(255,255,255,0.95)";
+        questionCount++;
+        nextStageCheck();
+    },250);
+}
+
+function wrong() {
+    score--;
+    document.getElementById("score").innerHTML="Score: "+score;
+    document.getElementById("wrongSound").play();
+    let q=document.getElementById("question");
+    q.style.background="rgba(255,0,0,0.7)";
+    setTimeout(()=>{
+        q.style.background="rgba(255,255,255,0.95)";
+        questionCount++;
+        nextStageCheck();
+    },350);
+}
+
+function nextStageCheck() {
+    if(questionCount>=10){
         if(stage<4){
             stage++;
             questionCount=0;
-            document.getElementById("stage").innerHTML = "Stage: "+stage+" / 4";
+            usedQuestions.clear();
+            document.getElementById("stage").innerHTML=`Stage: ${stage} / 4`;
             alert(`🎉 Stage ${stage} unlocked!`);
-        } else{
+        } else {
             document.getElementById("winScreen").style.display="block";
             return;
         }
@@ -196,34 +250,21 @@ function nextStageCheck(){
     newQuestion();
 }
 
-function flashWrong(){
-    let q=document.getElementById("question");
-    q.style.background="rgba(255,0,0,0.7)";
-    setTimeout(()=>{q.style.background="rgba(255,255,255,0.9)";},300);
-}
-
-function flashCorrect(){
-    let q=document.getElementById("question");
-    q.style.background="rgba(0,255,0,0.7)";
-    setTimeout(()=>{q.style.background="rgba(255,255,255,0.9)";},200);
-}
-
-function resetGame(){
-    score=0; questionCount=0; stage=1; isPaused=false;
+function resetGame() {
+    score=0; questionCount=0; stage=1; usedQuestions.clear();
     document.getElementById("winScreen").style.display="none";
     document.getElementById("score").innerHTML="Score: 0";
     document.getElementById("stage").innerHTML="Stage: 1 / 4";
-    document.getElementById("pauseBtn").innerText="Pause";
     newQuestion();
 }
 
-function togglePause(){
+function togglePause() {
     if(!isPaused){
-        clearInterval(timer);
         isPaused=true;
+        clearInterval(timer);
         document.getElementById("pauseBtn").innerText="Resume";
         document.getElementById("question").innerHTML="⏸ Game Paused";
-    } else{
+    } else {
         isPaused=false;
         document.getElementById("pauseBtn").innerText="Pause";
         newQuestion();
@@ -233,5 +274,3 @@ function togglePause(){
 
 </body>
 </html>
-
-
