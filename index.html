@@ -1,1 +1,1233 @@
+/* =========================================================
+   معركة الرياضيات – لعبة ويب (Canvas) مع صعوبة تكيفية + تحليلات
+   ========================================================= */
 
+(() => {
+  "use strict";
+
+  /* ------------------------- DOM ------------------------- */
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d", { alpha: true });
+
+  const scoreEl = document.getElementById("score");
+  const comboEl = document.getElementById("combo");
+  const hpEl = document.getElementById("hp");
+  const levelEl = document.getElementById("level");
+  const modeLabelEl = document.getElementById("modeLabel");
+  const timerFillEl = document.getElementById("timerFill");
+
+  const questionTextEl = document.getElementById("questionText");
+  const questionMetaEl = document.getElementById("questionMeta");
+  const answerInputEl = document.getElementById("answerInput");
+  const submitBtn = document.getElementById("submitBtn");
+  const pauseBtn = document.getElementById("pauseBtn");
+  const feedbackEl = document.getElementById("feedback");
+
+  const explainBoxEl = document.getElementById("explainBox");
+  const explainTextEl = document.getElementById("explainText");
+
+  const startOverlay = document.getElementById("startOverlay");
+  const endOverlay = document.getElementById("endOverlay");
+  const startBtn = document.getElementById("startBtn");
+  const restartBtn = document.getElementById("restartBtn");
+  const backBtn = document.getElementById("backBtn");
+  const downloadBtn = document.getElementById("downloadBtn");
+  const finalScoreEl = document.getElementById("finalScore");
+  const hiScoreLineEl = document.getElementById("hiScoreLine");
+
+  const analyticsCanvas = document.getElementById("analyticsCanvas");
+  const actx = analyticsCanvas.getContext("2d", { alpha: true });
+  const statsTextEl = document.getElementById("statsText");
+
+  const toggleExplainEl = document.getElementById("toggleExplain");
+  const toggleSoundEl = document.getElementById("toggleSound");
+
+  /* ------------------------- Utils ------------------------- */
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const randi = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+  const randf = (min, max) => Math.random() * (max - min) + min;
+
+  const nowMs = () => performance.now();
+  const fmt = (n) => (Math.abs(n) < 1e-9 ? "0" : String(n));
+
+  function normalizeNumberText(s) {
+    return String(s)
+      .trim()
+      .replace(/٪/g, "%")
+      .replace(/[٬]/g, "")     // Arabic thousands separator
+      .replace(/[،]/g, "")     // Arabic comma
+      .replace(/[٫,]/g, ".")   // Arabic decimal separator + comma
+      .replace(/\s+/g, "");
+  }
+
+  function parseNumeric(input) {
+    const s0 = normalizeNumberText(input);
+    if (!s0) return { ok: false, value: NaN };
+
+    // percent handling
+    if (s0.endsWith("%")) {
+      const v = parseNumeric(s0.slice(0, -1));
+      if (!v.ok) return v;
+      return { ok: true, value: v.value / 100 };
+    }
+
+    // fraction handling (a/b)
+    if (s0.includes("/")) {
+      const [a, b] = s0.split("/");
+      const na = Number(a);
+      const nb = Number(b);
+      if (!Number.isFinite(na) || !Number.isFinite(nb) || nb === 0) return { ok: false, value: NaN };
+      return { ok: true, value: na / nb };
+    }
+
+    const v = Number(s0);
+    if (!Number.isFinite(v)) return { ok: false, value: NaN };
+    return { ok: true, value: v };
+  }
+
+  function almostEqual(a, b, tol = 1e-6) {
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+    const scale = Math.max(1, Math.abs(a), Math.abs(b));
+    return Math.abs(a - b) <= tol * scale;
+  }
+
+  /* ------------------------- Audio ------------------------- */
+  let audioCtx = null;
+
+  function ensureAudio() {
+    if (!toggleSoundEl.checked) return null;
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioCtx;
+  }
+
+  function beep(type = "ok") {
+    const ac = ensureAudio();
+    if (!ac) return;
+    const t0 = ac.currentTime;
+
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+
+    o.type = (type === "hit") ? "sawtooth" : "sine";
+    const base = (type === "ok") ? 440 : (type === "bad") ? 140 : 220;
+    o.frequency.setValueAtTime(base, t0);
+    o.frequency.exponentialRampToValueAtTime(base * (type === "ok" ? 1.7 : 0.9), t0 + 0.12);
+
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.22, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+
+    o.connect(g);
+    g.connect(ac.destination);
+
+    o.start(t0);
+    o.stop(t0 + 0.2);
+  }
+
+  /* ------------------------- Game state ------------------------- */
+  const state = {
+    w: 960,
+    h: 540,
+    dpr: 1,
+    running: false,
+    paused: false,
+    mode: "mixed",
+    gameTime: 0, // seconds
+    score: 0,
+    combo: 0,
+    hp: 100,
+    level: 1,
+    // Ability estimates per topic (theta) for adaptive difficulty
+    theta: { calculus: 0, linalg: 0, prob: 0 },
+    // Event log for analytics/report
+    events: [],
+    // For selecting topic in mixed mode
+    topicStats: {
+      calculus: { n: 0, c: 0 },
+      linalg: { n: 0, c: 0 },
+      prob: { n: 0, c: 0 },
+    },
+    // spawn control
+    spawnT: 0,
+    enemies: [],
+    particles: [],
+    stars: [],
+    lastTs: 0,
+    // input
+    keys: new Set(),
+    pointer: { active: false, x: 0, y: 0 },
+    // current target
+    targetId: null,
+    // shot animation
+    shot: null,
+    // options
+    showExplain: true,
+  };
+
+  const TOPICS = ["calculus", "linalg", "prob"];
+
+  const MODE_NAMES = {
+    mixed: "متنوع",
+    calculus: "تفاضل/تكامل",
+    linalg: "جبر خطي",
+    prob: "احتمالات/بايز",
+  };
+
+  function difficultyFromTheta(theta) {
+    // theta in ~[-2..2] -> difficulty in [1..5]
+    const d = Math.round(clamp(3 + theta * 1.1, 1, 5));
+    return d;
+  }
+
+  function bFromDifficulty(d) {
+    // Convert difficulty to IRT "b" in ~[-1.6..1.6]
+    return (d - 3) * 0.8;
+  }
+
+  function logistic(x) {
+    // stable-ish
+    if (x > 12) return 0.999994;
+    if (x < -12) return 0.000006;
+    return 1 / (1 + Math.exp(-x));
+  }
+
+  function updateTheta(topic, b, correct) {
+    // Simple 1PL IRT gradient step:
+    // p = sigmoid(theta - b), theta += lr * (correct - p)
+    const lr = 0.35;
+    const th = state.theta[topic] ?? 0;
+    const p = logistic(th - b);
+    const next = clamp(th + lr * ((correct ? 1 : 0) - p), -2.5, 2.5);
+    state.theta[topic] = next;
+    return { p, next };
+  }
+
+  function chooseTopic() {
+    if (state.mode !== "mixed") return state.mode;
+
+    // In mixed mode: bias towards weaker topic (lower theta / accuracy)
+    const weights = TOPICS.map((t) => {
+      const th = state.theta[t] ?? 0;
+      const st = state.topicStats[t];
+      const acc = st.n ? (st.c / st.n) : 0.6;
+      // Higher weight if low theta or low accuracy
+      const w = clamp((1.2 - acc) + (0.8 - (th + 2.5) / 5), 0.15, 1.6);
+      return w;
+    });
+
+    const sum = weights.reduce((a, b) => a + b, 0);
+    let r = Math.random() * sum;
+    for (let i = 0; i < TOPICS.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return TOPICS[i];
+    }
+    return TOPICS[0];
+  }
+
+  /* ------------------------- Questions ------------------------- */
+
+  function polyToString(coeffs) {
+    // coeffs[k] is coefficient of x^k
+    // Build string like: 3x^3 - 2x + 5
+    const terms = [];
+    for (let k = coeffs.length - 1; k >= 0; k--) {
+      const a = coeffs[k];
+      if (a === 0) continue;
+      const sign = a < 0 ? "-" : "+";
+      const abs = Math.abs(a);
+
+      let t = "";
+      if (k === 0) t = String(abs);
+      else if (k === 1) t = (abs === 1 ? "x" : `${abs}x`);
+      else t = (abs === 1 ? `x^${k}` : `${abs}x^${k}`);
+
+      terms.push({ sign, t });
+    }
+    if (!terms.length) return "0";
+    let out = "";
+    for (let i = 0; i < terms.length; i++) {
+      const { sign, t } = terms[i];
+      if (i === 0) out += (sign === "-" ? "-" : "") + t;
+      else out += ` ${sign} ${t}`;
+    }
+    return out;
+  }
+
+  function makeDerivativeAtPoint(difficulty) {
+    const maxPow = clamp(2 + difficulty, 2, 6);
+    const coeffs = Array(maxPow + 1).fill(0);
+
+    // choose 3-5 non-zero terms
+    const termsCount = clamp(2 + Math.floor(difficulty / 2), 2, 5);
+    const used = new Set();
+    while (used.size < termsCount) {
+      used.add(randi(0, maxPow));
+    }
+    for (const k of used) {
+      let a = randi(1, 5 + difficulty);
+      if (Math.random() < 0.45) a *= -1;
+      // avoid constant-only
+      coeffs[k] = a;
+    }
+    // Ensure at least one non-zero for k>=1
+    if (coeffs.slice(1).every((x) => x === 0)) coeffs[randi(1, maxPow)] = randi(1, 6);
+
+    const x0 = randi(-3, 3) || 2; // avoid 0 sometimes
+    // derivative coefficients
+    let ans = 0;
+    const steps = [];
+    for (let k = 1; k < coeffs.length; k++) {
+      const a = coeffs[k];
+      if (a === 0) continue;
+      const derivCoeff = k * a;
+      const termVal = derivCoeff * Math.pow(x0, k - 1);
+      ans += termVal;
+      steps.push(`مشتقة (${fmt(a)}x^${k}) = ${fmt(derivCoeff)}x^${k - 1} ⇒ عند x=${x0}: ${fmt(derivCoeff)}·${fmt(x0)}^${k - 1} = ${fmt(termVal)}`);
+    }
+
+    const fStr = polyToString(coeffs);
+    const prompt = `إذا كان f(x) = ${fStr} ، احسب f'( ${x0} ).`;
+    const explain =
+      `الفكرة: نحسب مشتقة كثير الحدود ثم نعوض.\n\n` +
+      steps.join("\n") +
+      `\n\nإذن f'(${x0}) = ${fmt(ans)}.`;
+    return { prompt, answer: ans, explain, subtype: "derivative_at_point" };
+  }
+
+  function makeDefiniteIntegral(difficulty) {
+    // Build integrand with coefficients that integrate to integers from 0..m
+    const m = randi(2, 4); // upper bound
+    const termCount = clamp(1 + Math.floor(difficulty / 2), 1, 3);
+    const usedP = new Set();
+    const terms = []; // {a, p} where term is a*x^p
+    while (terms.length < termCount) {
+      const p = randi(0, clamp(1 + difficulty, 1, 4)); // power
+      if (usedP.has(p)) continue;
+      usedP.add(p);
+      let k = randi(1, 4 + difficulty);
+      if (Math.random() < 0.40) k *= -1;
+      // choose a = k*(p+1) so integral is k*x^(p+1)
+      const a = k * (p + 1);
+      terms.push({ a, p, k });
+    }
+
+    let ans = 0;
+    const integrandParts = [];
+    const steps = [];
+    const xPow = (pow) => (pow === 1 ? "x" : `x^${pow}`);
+    for (const t of terms) {
+      const { a, p, k } = t;
+      // integral from 0 to m: k*m^(p+1) - 0
+      const contrib = k * Math.pow(m, p + 1);
+      ans += contrib;
+
+      const termStr = (p === 0)
+        ? `${fmt(a)}`
+        : (p === 1)
+          ? `${fmt(a)}x`
+          : `${fmt(a)}x^${p}`;
+      integrandParts.push(termStr);
+
+      const integrandTerm = (p === 0) ? `${fmt(a)}` : (p === 1) ? `${fmt(a)}x` : `${fmt(a)}x^${p}`;
+      steps.push(`∫ ${integrandTerm} dx = ${fmt(k)}${xPow(p + 1)} (لأن a = k·(p+1)) ⇒ من 0 إلى ${m}: ${fmt(k)}·${fmt(m)}^${p + 1} = ${fmt(contrib)}`);
+    }
+
+    const integrand = integrandParts.join(" + ").replace(/\+\s-\s*/g, "- ");
+    const prompt = `احسب التكامل المحدد:  ∫ من 0 إلى ${m}  (${integrand}) dx.`;
+    const explain =
+      `الفكرة: نأخذ مشتق عكسي (تكامل) لكل حد ثم نعوض الحدود.\n\n` +
+      steps.join("\n") +
+      `\n\nإذن قيمة التكامل = ${fmt(ans)}.`;
+    return { prompt, answer: ans, explain, subtype: "definite_integral" };
+  }
+
+  function makeLinearEquation(difficulty) {
+    const x = randi(-8, 8);
+    let a = randi(2, 3 + difficulty);
+    if (Math.random() < 0.35) a *= -1;
+    const b = randi(-10, 10);
+    const c = a * x + b;
+
+    const prompt = `حل المعادلة:  ${fmt(a)}x ${b >= 0 ? "+ " + fmt(b) : "- " + fmt(Math.abs(b))} = ${fmt(c)}.  ما قيمة x؟`;
+    const explain =
+      `نرتب المعادلة:\n` +
+      `${fmt(a)}x = ${fmt(c)} ${b >= 0 ? "- " + fmt(b) : "+ " + fmt(Math.abs(b))}\n` +
+      `${fmt(a)}x = ${fmt(c - b)}\n` +
+      `x = ${fmt(c - b)} / ${fmt(a)} = ${fmt(x)}.`;
+    return { prompt, answer: x, explain, subtype: "linear_equation" };
+  }
+
+  function makeDotProduct(difficulty) {
+    const n = (difficulty <= 2) ? 2 : 3;
+    const a = Array.from({ length: n }, () => randi(-6, 6));
+    const b = Array.from({ length: n }, () => randi(-6, 6));
+    let ans = 0;
+    const parts = [];
+    for (let i = 0; i < n; i++) {
+      ans += a[i] * b[i];
+      parts.push(`${fmt(a[i])}·${fmt(b[i])}=${fmt(a[i] * b[i])}`);
+    }
+    const prompt = `لديك المتجهين a = [${a.join(", ")}] و b = [${b.join(", ")}]. احسب a·b (الضرب النقطي).`;
+    const explain =
+      `a·b = Σ aᵢbᵢ\n` +
+      parts.join(" ، ") +
+      `\nإذن a·b = ${fmt(ans)}.`;
+    return { prompt, answer: ans, explain, subtype: "dot_product" };
+  }
+
+  function det2(m) {
+    return m[0][0] * m[1][1] - m[0][1] * m[1][0];
+  }
+
+  function det3(m) {
+    // Rule of Sarrus
+    const a = m[0][0], b = m[0][1], c = m[0][2];
+    const d = m[1][0], e = m[1][1], f = m[1][2];
+    const g = m[2][0], h = m[2][1], i = m[2][2];
+    return a*e*i + b*f*g + c*d*h - c*e*g - b*d*i - a*f*h;
+  }
+
+  function makeDeterminant(difficulty) {
+    if (difficulty <= 3) {
+      const m = [
+        [randi(-5, 5), randi(-5, 5)],
+        [randi(-5, 5), randi(-5, 5)],
+      ];
+      const ans = det2(m);
+      const prompt = `احسب المحدد det([[${m[0].join(", ")}],[${m[1].join(", ")}]]) لمصفوفة 2×2.`;
+      const explain =
+        `لمصفوفة 2×2: det([[a,b],[c,d]]) = ad - bc\n` +
+        `a=${m[0][0]}, b=${m[0][1]}, c=${m[1][0]}, d=${m[1][1]}\n` +
+        `det = (${m[0][0]}·${m[1][1]}) - (${m[0][1]}·${m[1][0]}) = ${fmt(ans)}.`;
+      return { prompt, answer: ans, explain, subtype: "det_2x2" };
+    }
+
+    const m = [
+      [randi(-3, 3), randi(-3, 3), randi(-3, 3)],
+      [randi(-3, 3), randi(-3, 3), randi(-3, 3)],
+      [randi(-3, 3), randi(-3, 3), randi(-3, 3)],
+    ];
+    const ans = det3(m);
+    const prompt = `احسب المحدد det لمصفوفة 3×3:\n[${m[0].join(", ")}]\n[${m[1].join(", ")}]\n[${m[2].join(", ")}]`;
+    const explain =
+      `باستخدام قاعدة سارس:\n` +
+      `det = aei + bfg + cdh - ceg - bdi - afh\n` +
+      `a=${m[0][0]}, b=${m[0][1]}, c=${m[0][2]}\n` +
+      `d=${m[1][0]}, e=${m[1][1]}, f=${m[1][2]}\n` +
+      `g=${m[2][0]}, h=${m[2][1]}, i=${m[2][2]}\n` +
+      `det = ${fmt(ans)}.`;
+    return { prompt, answer: ans, explain, subtype: "det_3x3" };
+  }
+
+  function makeBayes(difficulty) {
+    // Population-based Bayes (clean integers)
+    const base = 1000;
+    const prevalenceOptions = [5, 10, 15, 20];
+    const sensOptions = [80, 85, 90, 95];
+    const fprOptions = [2, 5, 10, 15];
+
+    const prev = prevalenceOptions[randi(0, prevalenceOptions.length - 1)];
+    const sens = sensOptions[randi(0, sensOptions.length - 1)];
+    // Higher difficulty -> higher false positive rate or trickier numbers
+    const fpr = fprOptions[clamp(difficulty - 1, 0, fprOptions.length - 1)];
+
+    const sick = Math.round(base * (prev / 100));
+    const healthy = base - sick;
+    const tp = Math.round(sick * (sens / 100));
+    const fp = Math.round(healthy * (fpr / 100));
+    const ans = tp / (tp + fp);
+
+    const prompt =
+      `مسألة بايز (اكتب الإجابة بين 0 و 1):\n` +
+      `في مجتمع من ${base} شخص، نسبة الإصابة = ${prev}%.\n` +
+      `حساسية الاختبار = ${sens}%، ونسبة الموجب الكاذب = ${fpr}%.\n` +
+      `إذا كانت النتيجة موجبة، ما احتمال أن يكون الشخص مصاباً؟`;
+
+    const explain =
+      `نحسب بالأعداد لتبسيط بايز:\n` +
+      `عدد المصابين = ${sick} ، غير المصابين = ${healthy}\n` +
+      `الموجب الحقيقي TP = ${sick}×${sens}% = ${tp}\n` +
+      `الموجب الكاذب FP = ${healthy}×${fpr}% = ${fp}\n` +
+      `P(مصاب | موجب) = TP / (TP + FP) = ${tp} / ${tp + fp} = ${ans.toFixed(6)} تقريبًا.`;
+
+    return { prompt, answer: ans, explain, subtype: "bayes" };
+  }
+
+  function makeQuestion(topic, difficulty) {
+    // Randomize within topic
+    if (topic === "calculus") {
+      const pick = (Math.random() < 0.55) ? "der" : "int";
+      const q = (pick === "der") ? makeDerivativeAtPoint(difficulty) : makeDefiniteIntegral(difficulty);
+      return { ...q, topic, difficulty, b: bFromDifficulty(difficulty) };
+    }
+    if (topic === "linalg") {
+      const roll = Math.random();
+      let q;
+      if (roll < 0.34) q = makeLinearEquation(difficulty);
+      else if (roll < 0.68) q = makeDotProduct(difficulty);
+      else q = makeDeterminant(difficulty);
+      return { ...q, topic, difficulty, b: bFromDifficulty(difficulty) };
+    }
+    // prob
+    const q = makeBayes(difficulty);
+    return { ...q, topic, difficulty, b: bFromDifficulty(difficulty) };
+  }
+
+  /* ------------------------- Entities ------------------------- */
+
+  function makeStars(n = 120) {
+    state.stars = [];
+    for (let i = 0; i < n; i++) {
+      state.stars.push({
+        x: Math.random() * state.w,
+        y: Math.random() * state.h,
+        z: Math.random(),       // depth
+        r: 0.6 + Math.random() * 1.4,
+      });
+    }
+  }
+
+  function spawnEnemy() {
+    const topic = chooseTopic();
+    const difficulty = difficultyFromTheta(state.theta[topic] ?? 0);
+    const q = makeQuestion(topic, difficulty);
+
+    const size = lerp(34, 48, (difficulty - 1) / 4);
+    const x = randf(60, state.w - 60);
+    const y = -size - randf(0, 60);
+
+    // speed increases with difficulty and game time
+    const speed = lerp(52, 105, (difficulty - 1) / 4) * (1 + Math.min(0.9, state.gameTime / 160));
+    const enemy = {
+      id: cryptoRandomId(),
+      x, y,
+      size,
+      speed,
+      topic,
+      difficulty,
+      q,
+      spawnY: y,
+      alive: true,
+      bornMs: nowMs(),
+    };
+
+    state.enemies.push(enemy);
+  }
+
+  function cryptoRandomId() {
+    // In case crypto unavailable, fallback
+    try {
+      const a = new Uint32Array(2);
+      crypto.getRandomValues(a);
+      return `${a[0].toString(16)}${a[1].toString(16)}`;
+    } catch {
+      return Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
+    }
+  }
+
+  function addExplosion(x, y, n = 24) {
+    for (let i = 0; i < n; i++) {
+      state.particles.push({
+        x, y,
+        vx: randf(-140, 140),
+        vy: randf(-180, 60),
+        life: randf(0.35, 0.9),
+        t: 0,
+        r: randf(1.4, 2.8),
+      });
+    }
+  }
+
+  /* ------------------------- UI helpers ------------------------- */
+
+  function setFeedback(msg, type = "") {
+    feedbackEl.textContent = msg;
+    feedbackEl.classList.remove("good", "bad");
+    if (type === "good") feedbackEl.classList.add("good");
+    if (type === "bad") feedbackEl.classList.add("bad");
+  }
+
+  function setExplain(text) {
+    explainTextEl.textContent = text || "—";
+    explainBoxEl.open = !!state.showExplain;
+  }
+
+  function updateHud() {
+    scoreEl.textContent = String(Math.floor(state.score));
+    comboEl.textContent = String(state.combo);
+    hpEl.textContent = String(Math.max(0, Math.floor(state.hp)));
+    levelEl.textContent = String(state.level);
+    modeLabelEl.textContent = `وضع: ${MODE_NAMES[state.mode] || state.mode}`;
+  }
+
+  function showHiScore(mode) {
+    const key = `mathRaid_hiScore_${mode}`;
+    const hs = Number(localStorage.getItem(key) || "0");
+    hiScoreLineEl.textContent = hs ? `أعلى نتيجة محفوظة لهذا الوضع: ${hs}` : "لا يوجد أعلى نتيجة بعد — كن أول واحد!";
+  }
+
+  /* ------------------------- Game flow ------------------------- */
+
+  function resetGame(mode) {
+    state.running = false;
+    state.paused = false;
+    state.mode = mode || state.mode;
+
+    state.gameTime = 0;
+    state.score = 0;
+    state.combo = 0;
+    state.hp = 100;
+    state.level = 1;
+    state.spawnT = 0;
+    state.enemies = [];
+    state.particles = [];
+    state.shot = null;
+    state.targetId = null;
+
+    state.events = [];
+    state.theta = { calculus: 0, linalg: 0, prob: 0 };
+    state.topicStats = {
+      calculus: { n: 0, c: 0 },
+      linalg: { n: 0, c: 0 },
+      prob: { n: 0, c: 0 },
+    };
+
+    answerInputEl.value = "";
+    setFeedback("جاهز؟ أول عدو سيظهر خلال ثوانٍ…");
+    setExplain("—");
+    updateHud();
+    makeStars(Math.round(clamp(state.w / 8, 90, 180)));
+    questionTextEl.textContent = "—";
+    questionMetaEl.textContent = "حل مسألة العدو الأقرب لك";
+    timerFillEl.style.width = "0%";
+  }
+
+  function startGame() {
+    state.running = true;
+    state.paused = false;
+    state.lastTs = nowMs();
+    // For mobile: focus answer input
+    setTimeout(() => answerInputEl.focus(), 50);
+    requestAnimationFrame(loop);
+  }
+
+  function endGame() {
+    state.running = false;
+    endOverlay.classList.remove("hidden");
+    finalScoreEl.textContent = String(Math.floor(state.score));
+
+    // Save high score
+    const key = `mathRaid_hiScore_${state.mode}`;
+    const prev = Number(localStorage.getItem(key) || "0");
+    if (state.score > prev) localStorage.setItem(key, String(Math.floor(state.score)));
+
+    // Draw analytics + stats
+    drawAnalytics();
+    renderStatsText();
+  }
+
+  function togglePause() {
+    if (!state.running) return;
+    state.paused = !state.paused;
+    pauseBtn.textContent = state.paused ? "متابعة" : "إيقاف";
+    if (!state.paused) {
+      state.lastTs = nowMs();
+      requestAnimationFrame(loop);
+      setTimeout(() => answerInputEl.focus(), 50);
+    }
+  }
+
+  /* ------------------------- Target selection ------------------------- */
+
+  function pickTargetEnemy() {
+    // pick closest to bottom (highest y)
+    let best = null;
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (!best || e.y > best.y) best = e;
+    }
+    state.targetId = best ? best.id : null;
+    return best;
+  }
+
+  function getTargetEnemy() {
+    if (!state.targetId) return null;
+    return state.enemies.find((e) => e.id === state.targetId && e.alive) || null;
+  }
+
+  /* ------------------------- Answer handling ------------------------- */
+
+  function handleSubmit() {
+    if (!state.running || state.paused) return;
+    const enemy = pickTargetEnemy();
+    if (!enemy) {
+      setFeedback("لا يوجد عدو الآن…");
+      return;
+    }
+    const q = enemy.q;
+
+    const raw = answerInputEl.value;
+    const parsed = parseNumeric(raw);
+    if (!parsed.ok) {
+      setFeedback("الإجابة غير مفهومة. اكتب رقم/كسر مثل 3/4 أو 0.75.", "bad");
+      beep("bad");
+      return;
+    }
+
+    const rt = (nowMs() - enemy.bornMs) / 1000;
+    const correct = almostEqual(parsed.value, q.answer, 1e-4);
+
+    // Update topic stats
+    state.topicStats[enemy.topic].n += 1;
+    if (correct) state.topicStats[enemy.topic].c += 1;
+
+    const { p, next } = updateTheta(enemy.topic, q.b, correct);
+
+    // Log event (for analytics)
+    state.events.push({
+      t: Number(state.gameTime.toFixed(3)),
+      topic: enemy.topic,
+      difficulty: enemy.difficulty,
+      b: Number(q.b.toFixed(3)),
+      p: Number(p.toFixed(3)),
+      correct,
+      rt: Number(rt.toFixed(3)),
+      thetaAfter: Number(next.toFixed(3)),
+      subtype: q.subtype,
+      answer: parsed.value,
+      expected: q.answer,
+    });
+
+    if (correct) {
+      const base = 90 + enemy.difficulty * 18;
+      const mult = 1 + Math.min(1.5, state.combo * 0.08);
+      const gain = Math.round(base * mult);
+
+      state.score += gain;
+      state.combo += 1;
+
+      // Level is just a nice presentation metric
+      const avgTheta = (state.theta.calculus + state.theta.linalg + state.theta.prob) / 3;
+      state.level = clamp(1 + Math.floor((avgTheta + 2.5) * 1.3), 1, 8);
+
+      // shot animation
+      state.shot = { x0: state.w * 0.5, y0: state.h - 70, x1: enemy.x, y1: enemy.y, t: 0 };
+
+      enemy.alive = false;
+      addExplosion(enemy.x, enemy.y, 26 + enemy.difficulty * 4);
+
+      setFeedback(`✅ صحيح! +${gain} (زمن: ${rt.toFixed(2)}ث)`, "good");
+      setExplain(q.explain);
+      beep("ok");
+    } else {
+      state.combo = 0;
+      const dmg = 7 + enemy.difficulty * 2;
+      state.hp -= dmg;
+
+      setFeedback(`❌ خطأ! -${dmg} طاقة. (تلميح: راجع الشرح)`, "bad");
+      setExplain(q.explain);
+      beep("bad");
+    }
+
+    answerInputEl.value = "";
+    updateHud();
+    pickTargetEnemy(); // refresh
+
+    if (state.hp <= 0) endGame();
+  }
+
+  /* ------------------------- Loop ------------------------- */
+
+  function update(dt) {
+    state.gameTime += dt;
+    state.spawnT += dt;
+
+    // Dynamic spawn interval based on level/difficulty
+    const avgTheta = (state.theta.calculus + state.theta.linalg + state.theta.prob) / 3;
+    const d = difficultyFromTheta(avgTheta);
+    const interval = clamp(2.1 - (d * 0.25) - Math.min(0.5, state.gameTime / 180), 0.55, 2.2);
+
+    if (state.spawnT >= interval) {
+      state.spawnT = 0;
+      spawnEnemy();
+    }
+
+    // Update enemies
+    const bottomY = state.h - 120;
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      e.y += e.speed * dt;
+
+      if (e.y > bottomY) {
+        // Enemy reached bottom -> damage
+        e.alive = false;
+        state.combo = 0;
+        state.hp -= 15;
+
+        addExplosion(e.x, bottomY, 24);
+        beep("hit");
+        setFeedback("⚠️ عدو اخترق الدفاعات! -15 طاقة.", "bad");
+        updateHud();
+
+        // log as miss (incorrect without answer)
+        const q = e.q;
+        const { p, next } = updateTheta(e.topic, q.b, false);
+        state.events.push({
+          t: Number(state.gameTime.toFixed(3)),
+          topic: e.topic,
+          difficulty: e.difficulty,
+          b: Number(q.b.toFixed(3)),
+          p: Number(p.toFixed(3)),
+          correct: false,
+          rt: null,
+          thetaAfter: Number(next.toFixed(3)),
+          subtype: q.subtype,
+          answer: null,
+          expected: q.answer,
+          reason: "timeout",
+        });
+
+        state.topicStats[e.topic].n += 1;
+      }
+    }
+
+    // Update particles
+    state.particles = state.particles.filter((p) => {
+      p.t += dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 320 * dt; // gravity
+      return p.t < p.life;
+    });
+
+    // Update shot
+    if (state.shot) {
+      state.shot.t += dt;
+      if (state.shot.t > 0.18) state.shot = null;
+    }
+
+    // Remove dead enemies gradually
+    if (state.enemies.length > 60) {
+      state.enemies = state.enemies.filter((e) => e.alive);
+    }
+
+    // Update target & UI question
+    const target = pickTargetEnemy();
+    if (target) {
+      questionTextEl.textContent = target.q.prompt;
+      const th = state.theta[target.topic] ?? 0;
+      const d2 = difficultyFromTheta(th);
+      questionMetaEl.textContent = `العدو الأقرب: ${MODE_NAMES[target.topic] || target.topic} | صعوبة تكيفية: ${d2}/5 | θ=${th.toFixed(2)}`;
+
+      // timer based on distance to bottom
+      const distTotal = (bottomY - target.spawnY);
+      const distLeft = (bottomY - target.y);
+      const frac = clamp(distLeft / distTotal, 0, 1);
+      timerFillEl.style.width = `${Math.round(frac * 100)}%`;
+    } else {
+      questionTextEl.textContent = "—";
+      questionMetaEl.textContent = "حل مسألة العدو الأقرب لك";
+      timerFillEl.style.width = "0%";
+    }
+
+    if (state.hp <= 0) endGame();
+  }
+
+  function draw() {
+    // Clear
+    ctx.clearRect(0, 0, state.w, state.h);
+
+    // Background: starfield
+    drawStars();
+
+    // Soft fog
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    const g = ctx.createRadialGradient(state.w * 0.5, state.h * 0.25, 60, state.w * 0.5, state.h * 0.35, state.w * 0.75);
+    g.addColorStop(0, "rgba(120, 200, 255, 0.22)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, state.w, state.h);
+    ctx.restore();
+
+    // Player ship (purely visual)
+    drawShip(state.w * 0.5, state.h - 70);
+
+    // Enemies
+    const target = getTargetEnemy();
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      drawEnemy(e, target && e.id === target.id);
+    }
+
+    // Shot beam
+    if (state.shot) drawShot(state.shot);
+
+    // Particles
+    for (const p of state.particles) drawParticle(p);
+  }
+
+  function drawStars() {
+    for (const s of state.stars) {
+      s.y += lerp(8, 46, 1 - s.z) * (1 / 60);
+      if (s.y > state.h + 10) { s.y = -10; s.x = Math.random() * state.w; }
+      ctx.globalAlpha = lerp(0.20, 0.90, 1 - s.z);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = "white";
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawShip(x, y) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.globalAlpha = 0.9;
+
+    // body
+    ctx.beginPath();
+    ctx.moveTo(0, -18);
+    ctx.lineTo(16, 10);
+    ctx.lineTo(0, 18);
+    ctx.lineTo(-16, 10);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(108,204,255,.85)";
+    ctx.fill();
+
+    // cockpit
+    ctx.beginPath();
+    ctx.ellipse(0, 2, 6, 9, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.fill();
+
+    // glow
+    ctx.globalAlpha = 0.35;
+    ctx.beginPath();
+    ctx.arc(0, 6, 24, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(108,204,255,.25)";
+    ctx.fill();
+
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawEnemy(e, isTarget) {
+    ctx.save();
+    ctx.translate(e.x, e.y);
+
+    const r = e.size * 0.52;
+
+    // halo
+    ctx.globalAlpha = isTarget ? 0.30 : 0.18;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.7, 0, Math.PI * 2);
+    ctx.fillStyle = isTarget ? "rgba(255, 209, 102, .35)" : "rgba(108,204,255,.22)";
+    ctx.fill();
+
+    // core
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+
+    const col = (e.topic === "calculus") ? "rgba(94,242,154,.9)"
+      : (e.topic === "linalg") ? "rgba(108,204,255,.9)"
+      : "rgba(255,107,107,.88)";
+
+    ctx.fillStyle = col;
+    ctx.fill();
+
+    // ring
+    ctx.lineWidth = isTarget ? 3 : 2;
+    ctx.strokeStyle = isTarget ? "rgba(255, 209, 102, .95)" : "rgba(0,0,0,.35)";
+    ctx.stroke();
+
+    // label: difficulty
+    ctx.font = "bold 12px ui-monospace, Menlo, Consolas, monospace";
+    ctx.fillStyle = "rgba(0,0,0,.75)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`D${e.difficulty}`, 0, 0);
+
+    ctx.restore();
+  }
+
+  function drawShot(s) {
+    const t = clamp(s.t / 0.18, 0, 1);
+    const x = lerp(s.x0, s.x1, t);
+    const y = lerp(s.y0, s.y1, t);
+
+    ctx.save();
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(s.x0, s.y0);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = "rgba(255,255,255,.85)";
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(s.x0, s.y0);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = "rgba(108,204,255,.35)";
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawParticle(p) {
+    const a = 1 - (p.t / p.life);
+    ctx.globalAlpha = a;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 209, 102, .95)";
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function loop() {
+    if (!state.running || state.paused) return;
+
+    const ts = nowMs();
+    const dt = clamp((ts - state.lastTs) / 1000, 0, 0.05);
+    state.lastTs = ts;
+
+    update(dt);
+    draw();
+
+    requestAnimationFrame(loop);
+  }
+
+  /* ------------------------- Analytics & report ------------------------- */
+
+  function drawAnalytics() {
+    const w = analyticsCanvas.width;
+    const h = analyticsCanvas.height;
+    actx.clearRect(0, 0, w, h);
+
+    // background
+    actx.fillStyle = "rgba(255,255,255,.06)";
+    actx.fillRect(0, 0, w, h);
+
+    const padding = 42;
+    const plotW = w - padding * 2;
+    const plotH = h - padding * 2;
+
+    const ev = state.events.filter(e => Number.isFinite(e.thetaAfter));
+    if (ev.length < 2) {
+      actx.fillStyle = "rgba(255,255,255,.8)";
+      actx.font = "14px system-ui";
+      actx.fillText("لا توجد بيانات كافية للرسم.", 18, 30);
+      return;
+    }
+
+    const xs = ev.map((e) => e.t);
+    const ys = ev.map((e) => e.thetaAfter);
+
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = -2.5;
+    const maxY = 2.5;
+
+    function X(x) { return padding + (x - minX) / Math.max(1e-6, (maxX - minX)) * plotW; }
+    function Y(y) { return padding + (1 - (y - minY) / (maxY - minY)) * plotH; }
+
+    // axes
+    actx.strokeStyle = "rgba(255,255,255,.25)";
+    actx.lineWidth = 1;
+    actx.beginPath();
+    actx.moveTo(padding, padding);
+    actx.lineTo(padding, h - padding);
+    actx.lineTo(w - padding, h - padding);
+    actx.stroke();
+
+    // grid
+    actx.strokeStyle = "rgba(255,255,255,.10)";
+    actx.beginPath();
+    for (let k = 1; k <= 4; k++) {
+      const yy = padding + (plotH * k) / 5;
+      actx.moveTo(padding, yy);
+      actx.lineTo(w - padding, yy);
+    }
+    actx.stroke();
+
+    // line
+    actx.strokeStyle = "rgba(108,204,255,.95)";
+    actx.lineWidth = 2;
+    actx.beginPath();
+    actx.moveTo(X(xs[0]), Y(ys[0]));
+    for (let i = 1; i < xs.length; i++) {
+      actx.lineTo(X(xs[i]), Y(ys[i]));
+    }
+    actx.stroke();
+
+    // points colored by correctness
+    for (const e of ev) {
+      actx.beginPath();
+      actx.arc(X(e.t), Y(e.thetaAfter), 2.7, 0, Math.PI * 2);
+      actx.fillStyle = e.correct ? "rgba(94,242,154,.95)" : "rgba(255,107,107,.95)";
+      actx.fill();
+    }
+
+    // labels
+    actx.fillStyle = "rgba(255,255,255,.9)";
+    actx.font = "12px system-ui";
+    actx.fillText("تطور θ (تقدير المهارة) مع الزمن", padding, 18);
+    actx.fillStyle = "rgba(255,255,255,.7)";
+    actx.fillText("θ", 14, padding + 2);
+    actx.fillText("الزمن (ث)", w - padding - 70, h - 14);
+  }
+
+  function renderStatsText() {
+    const ev = state.events.filter(e => typeof e.correct === "boolean");
+    const n = ev.length;
+    const c = ev.filter(e => e.correct).length;
+    const acc = n ? (c / n) : 0;
+    const rts = ev.filter(e => Number.isFinite(e.rt)).map(e => e.rt);
+    const avgRt = rts.length ? (rts.reduce((a,b)=>a+b,0)/rts.length) : null;
+
+    const lines = [];
+    lines.push(`عدد المحاولات: ${n}`);
+    lines.push(`الدقة: ${(acc*100).toFixed(1)}%`);
+    if (avgRt != null) lines.push(`متوسط زمن الإجابة: ${avgRt.toFixed(2)} ث`);
+    lines.push(`θ النهائي (تفاضل): ${state.theta.calculus.toFixed(2)} | θ (جبر خطي): ${state.theta.linalg.toFixed(2)} | θ (بايز): ${state.theta.prob.toFixed(2)}`);
+    lines.push(`ملحوظة: النقاط الخضراء = إجابة صحيحة، الحمراء = خطأ/تجاوز وقت.`);
+
+    statsTextEl.textContent = lines.join("  •  ");
+  }
+
+  function buildReportObject() {
+    const n = state.events.length;
+    const c = state.events.filter(e => e.correct === true).length;
+    const acc = n ? c / n : 0;
+
+    const report = {
+      title: "MathRaid University Report",
+      mode: state.mode,
+      dateISO: new Date().toISOString(),
+      score: Math.floor(state.score),
+      summary: {
+        attempts: n,
+        correct: c,
+        accuracy: Number((acc * 100).toFixed(2)),
+        finalTheta: {
+          calculus: Number(state.theta.calculus.toFixed(3)),
+          linalg: Number(state.theta.linalg.toFixed(3)),
+          prob: Number(state.theta.prob.toFixed(3)),
+        },
+      },
+      events: state.events,
+    };
+    return report;
+  }
+
+  function downloadReport() {
+    const report = buildReportObject();
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mathraid_report_${state.mode}_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  /* ------------------------- Resize ------------------------- */
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    const cssW = rect.width;
+    const cssH = rect.height;
+    const dpr = window.devicePixelRatio || 1;
+
+    state.w = cssW;
+    state.h = cssH;
+    state.dpr = dpr;
+
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+
+    // draw in CSS pixels
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    makeStars(Math.round(clamp(state.w / 8, 90, 180)));
+  }
+
+  window.addEventListener("resize", resize);
+
+  /* ------------------------- Input ------------------------- */
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") togglePause();
+    if (e.key === "Enter") {
+      if (document.activeElement === answerInputEl) handleSubmit();
+    }
+  });
+
+  submitBtn.addEventListener("click", () => handleSubmit());
+  pauseBtn.addEventListener("click", () => togglePause());
+
+  // Simple pointer interaction: tap canvas to focus input
+  canvas.addEventListener("pointerdown", (e) => {
+    state.pointer.active = true;
+    const rect = canvas.getBoundingClientRect();
+    state.pointer.x = e.clientX - rect.left;
+    state.pointer.y = e.clientY - rect.top;
+    answerInputEl.focus();
+  });
+
+  window.addEventListener("pointerup", () => state.pointer.active = false);
+
+  /* ------------------------- Overlay actions ------------------------- */
+
+  // mode selection buttons
+  document.querySelectorAll(".modeBtn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-mode");
+      state.mode = mode;
+      showHiScore(mode);
+      document.querySelectorAll(".modeBtn").forEach(b => b.classList.remove("selected"));
+      btn.classList.add("selected");
+    });
+  });
+
+  startBtn.addEventListener("click", () => {
+    state.showExplain = !!toggleExplainEl.checked;
+    ensureAudio(); // initialize audio context on user action
+    startOverlay.classList.add("hidden");
+    endOverlay.classList.add("hidden");
+    resetGame(state.mode);
+    updateHud();
+    startGame();
+  });
+
+  restartBtn.addEventListener("click", () => {
+    endOverlay.classList.add("hidden");
+    resetGame(state.mode);
+    updateHud();
+    startGame();
+  });
+
+  backBtn.addEventListener("click", () => {
+    endOverlay.classList.add("hidden");
+    startOverlay.classList.remove("hidden");
+    showHiScore(state.mode);
+  });
+
+  downloadBtn.addEventListener("click", () => downloadReport());
+
+  toggleExplainEl.addEventListener("change", () => {
+    state.showExplain = !!toggleExplainEl.checked;
+  });
+
+  // initial
+  resize();
+  showHiScore(state.mode);
+  updateHud();
+})();
